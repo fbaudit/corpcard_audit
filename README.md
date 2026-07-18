@@ -47,6 +47,26 @@
 
 ## 🚀 빠른 시작 (Quick Start)
 
+### 방법 A. npx로 바로 사용 (npm 배포판)
+
+설치 없이 `claude_desktop_config.json`에 아래만 추가하면 됩니다:
+
+```json
+{
+  "mcpServers": {
+    "corpcard-audit": {
+      "command": "npx",
+      "args": ["-y", "corpcard-audit-mcp-server"],
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-ant-your-key-here"
+      }
+    }
+  }
+}
+```
+
+### 방법 B. 소스에서 설치
+
 ### 1. 설치
 
 ```bash
@@ -168,6 +188,13 @@ The AI designs the rules; the engine makes the calls — so results are reproduc
 npm run build   # TypeScript 컴파일
 npm test        # 룰 엔진·파서 테스트
 npm run dev     # tsx로 즉시 실행
+```
+
+### npm 배포 (메인테이너용)
+
+```bash
+npm login
+npm publish     # prepublishOnly가 자동으로 빌드합니다
 ```
 
 ## 🗺️ 로드맵

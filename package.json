@@ -44,5 +44,19 @@
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "files": [
+    "dist",
+    "sample_data",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fbaudit/corpcard_audit.git"
+  },
+  "homepage": "https://github.com/fbaudit/corpcard_audit#readme",
+  "bugs": {
+    "url": "https://github.com/fbaudit/corpcard_audit/issues"
   }
 }
