@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+.env
+corpcard_audit_report.md
+corpcard_audit_report.csv
+.DS_Store

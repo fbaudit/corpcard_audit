@@ -1,0 +1,48 @@
+{
+  "name": "corpcard-audit-mcp-server",
+  "version": "1.0.0",
+  "description": "AI-powered corporate card audit MCP server — generates anomaly-detection scenarios from your card data and runs them automatically | 법인카드 이상징후 탐지 MCP 서버",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "corpcard-audit-mcp-server": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "audit",
+    "internal-audit",
+    "corporate-card",
+    "anomaly-detection",
+    "fraud-detection",
+    "claude",
+    "ai",
+    "법인카드",
+    "내부감사",
+    "이상징후"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
+    "@modelcontextprotocol/sdk": "^1.21.0",
+    "iconv-lite": "^0.6.3",
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
