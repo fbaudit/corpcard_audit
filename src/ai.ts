@@ -168,6 +168,7 @@ export async function generateScenarios(
   dataset: Dataset,
   count: number,
   focus?: string,
+  includeSampleRows = true,
 ): Promise<Array<Omit<Scenario, "id" | "source" | "created_at">>> {
   assertApiKey();
   const client = new Anthropic();
@@ -185,7 +186,9 @@ export async function generateScenarios(
       top_values: firstField.top_values,
     },
     columns: dataset.profile,
-    sample_rows: dataset.rows.slice(0, SAMPLE_ROWS),
+    // Privacy option: callers can withhold raw sample rows and rely on the
+    // column statistics alone (slightly less context for the model).
+    sample_rows: includeSampleRows ? dataset.rows.slice(0, SAMPLE_ROWS) : [],
   };
 
   const userPrompt = [

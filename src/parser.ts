@@ -14,7 +14,11 @@ import type { ColumnProfile, Dataset } from "./types.js";
 const PROFILE_SAMPLE_LIMIT = 5000;
 const TOP_VALUES_LIMIT = 12;
 
-export function loadDataset(filePath: string, sheetName?: string): Dataset {
+export function loadDataset(
+  filePath: string,
+  sheetName?: string,
+  skipRows?: number,
+): Dataset {
   const resolved = path.resolve(filePath);
   if (!fs.existsSync(resolved)) {
     throw new Error(
@@ -44,27 +48,40 @@ export function loadDataset(filePath: string, sheetName?: string): Dataset {
     raw: false,
     defval: "",
   });
-  const nonEmptyRows = matrix.filter((r) =>
+  const afterSkip = skipRows && skipRows > 0 ? matrix.slice(skipRows) : matrix;
+  const nonEmptyRows = afterSkip.filter((r) =>
     r.some((c) => String(c ?? "").trim() !== ""),
   );
   if (nonEmptyRows.length < 2) {
     throw new Error(
-      "The file must contain a header row and at least one data row.",
+      "The file must contain a header row and at least one data row." +
+        (skipRows ? ` (skip_rows=${skipRows} left too few rows)` : ""),
     );
   }
 
-  const headers = nonEmptyRows[0].map((h, i) => {
+  // With an explicit skip_rows, the caller says "the next row IS the header".
+  // Otherwise, auto-detect: bank/card-company exports often carry title and
+  // summary lines above the real header row.
+  const headerIdx = skipRows && skipRows > 0 ? 0 : detectHeaderIndex(nonEmptyRows);
+
+  const headers = nonEmptyRows[headerIdx].map((h, i) => {
     const name = String(h ?? "").trim();
     return name === "" ? `column_${i + 1}` : name;
   });
 
-  const rows: Array<Record<string, string>> = nonEmptyRows.slice(1).map((r) => {
-    const record: Record<string, string> = {};
-    headers.forEach((h, i) => {
-      record[h] = String(r[i] ?? "").trim();
+  const rows: Array<Record<string, string>> = nonEmptyRows
+    .slice(headerIdx + 1)
+    .map((r) => {
+      const record: Record<string, string> = {};
+      headers.forEach((h, i) => {
+        record[h] = String(r[i] ?? "").trim();
+      });
+      return record;
     });
-    return record;
-  });
+
+  if (rows.length === 0) {
+    throw new Error("No data rows found below the header row.");
+  }
 
   return {
     file_path: resolved,
@@ -72,8 +89,43 @@ export function loadDataset(filePath: string, sheetName?: string): Dataset {
     headers,
     rows,
     profile: profileColumns(headers, rows),
+    skipped_leading_rows: (skipRows ?? 0) + headerIdx,
     loaded_at: new Date().toISOString(),
   };
+}
+
+const HEADER_SCAN_LIMIT = 20;
+
+/**
+ * Finds the most likely header row among the leading rows.
+ * Heuristic: the first sufficiently-wide row whose cells are mostly
+ * non-numeric/non-date and mutually distinct. Title lines ("법인카드
+ * 사용내역") and summary lines ("조회기간: ...") have too few cells and are
+ * skipped; data rows are rejected by the numeric/date share check.
+ */
+function detectHeaderIndex(nonEmptyRows: unknown[][]): number {
+  const scan = nonEmptyRows.slice(0, HEADER_SCAN_LIMIT);
+  const widths = scan.map(
+    (r) => r.filter((c) => String(c ?? "").trim() !== "").length,
+  );
+  const maxWidth = Math.max(...widths);
+  const minHeaderWidth = Math.max(2, Math.ceil(maxWidth * 0.7));
+
+  for (let i = 0; i < scan.length - 1; i++) {
+    const cells = scan[i]
+      .map((c) => String(c ?? "").trim())
+      .filter((v) => v !== "");
+    if (cells.length < minHeaderWidth) continue;
+    const dataLike = cells.filter(
+      (v) => parseNumber(v) !== null || parseDate(v) !== null,
+    ).length;
+    if (dataLike / cells.length >= 0.5) continue;
+    const distinct =
+      new Set(cells.map((c) => c.toLowerCase())).size === cells.length;
+    if (!distinct) continue;
+    return i;
+  }
+  return 0;
 }
 
 function decodeText(buf: Buffer): string {

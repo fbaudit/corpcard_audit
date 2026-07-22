@@ -122,5 +122,7 @@ export interface Dataset {
   headers: string[];
   rows: Array<Record<string, string>>;
   profile: ColumnProfile[];
+  /** Rows above the detected header (title/summary lines) that were skipped. */
+  skipped_leading_rows: number;
   loaded_at: string;
 }

@@ -71,6 +71,25 @@ const ruleSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+/** Lenient schema for scenario library files (hand-edited files welcome). */
+const scenarioFileEntrySchema = z.object({
+  name: z.string().min(1),
+  name_en: z.string().default(""),
+  description: z.string().default(""),
+  audit_rationale: z.string().default(""),
+  severity: z.enum(["high", "medium", "low"]).default("medium"),
+  rule: ruleSchema,
+  source: z.enum(["ai", "manual"]).default("manual"),
+});
+
+const scenarioFileSchema = z.union([
+  z.object({
+    format: z.literal("corpcard-scenarios"),
+    scenarios: z.array(scenarioFileEntrySchema).min(1),
+  }),
+  z.array(scenarioFileEntrySchema).min(1),
+]);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -156,15 +175,24 @@ server.registerTool(
 
 Korean CSV encodings (EUC-KR/CP949) are detected automatically. The first row must be the header row; headers may be Korean or English. If detection scenarios already exist in the session, they are automatically re-run against the newly loaded data and the anomaly summary is included in the response.
 
+Title/summary lines above the real header row (common in card-company exports) are skipped automatically; pass skip_rows to override the detection manually.
+
 Args:
   - file_path (string): Absolute path to the .csv/.xlsx/.xls file
   - sheet (string, optional): Sheet name for Excel files (default: first sheet)
+  - skip_rows (number, optional): Skip exactly this many leading rows and treat the next row as the header (disables auto-detection)
   - response_format ('markdown' | 'json'): default 'markdown'
 
 Returns: dataset profile — row count, per-column inferred types and top values, with the FIRST column highlighted (scenario generation is anchored on it) — plus auto-analysis results when scenarios exist.`,
     inputSchema: {
       file_path: z.string().describe("Absolute path to the CSV/XLSX/XLS file"),
       sheet: z.string().optional().describe("Excel sheet name (default: first sheet)"),
+      skip_rows: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("Leading rows to skip before the header (overrides auto-detection)"),
       response_format: responseFormatSchema,
     },
     annotations: {
@@ -174,9 +202,9 @@ Returns: dataset profile — row count, per-column inferred types and top values
       openWorldHint: false,
     },
   },
-  async ({ file_path, sheet, response_format }) => {
+  async ({ file_path, sheet, skip_rows, response_format }) => {
     try {
-      const dataset = loadDataset(file_path, sheet);
+      const dataset = loadDataset(file_path, sheet, skip_rows);
       state.dataset = dataset;
       state.results.clear();
 
@@ -189,6 +217,7 @@ Returns: dataset profile — row count, per-column inferred types and top values
             {
               file_path: dataset.file_path,
               sheet: dataset.sheet_name,
+              skipped_leading_rows: dataset.skipped_leading_rows,
               total_rows: dataset.rows.length,
               headers: dataset.headers,
               first_field: dataset.profile[0],
@@ -213,6 +242,11 @@ Returns: dataset profile — row count, per-column inferred types and top values
       if (dataset.sheet_name) lines.push(`- **시트**: ${dataset.sheet_name}`);
       lines.push(`- **거래 건수**: ${dataset.rows.length.toLocaleString()}`);
       lines.push(`- **컬럼 수**: ${dataset.headers.length}`);
+      if (dataset.skipped_leading_rows > 0) {
+        lines.push(
+          `- **상단 ${dataset.skipped_leading_rows}행 건너뜀** (제목/요약 행으로 판단 — 잘못되었다면 skip_rows로 직접 지정하세요)`,
+        );
+      }
       lines.push(``);
       lines.push(
         `## 첫 번째 필드: \`${first.name}\` (시나리오 생성 기준 필드)`,
@@ -264,6 +298,7 @@ Args:
   - count (number): How many scenarios to generate (1-20)
   - focus (string, optional): Extra audit focus, e.g. "심야/주말 사용과 분할결제 위주로"
   - replace (boolean): true = discard existing scenarios first; false = append (default false)
+  - include_sample_rows (boolean): false = privacy mode, do NOT send the 8 sample rows to the Claude API (column statistics only; slightly less context for the AI). Default true.
   - response_format ('markdown' | 'json'): default 'markdown'
 
 Returns: the generated scenarios (name, severity, rule) and, since data is loaded, the automatic analysis result per scenario (anomaly counts + sample detections).
@@ -278,6 +313,10 @@ Error Handling:
         .boolean()
         .default(false)
         .describe("Discard existing scenarios before adding new ones"),
+      include_sample_rows: z
+        .boolean()
+        .default(true)
+        .describe("false = do not send sample rows to the Claude API (privacy mode)"),
       response_format: responseFormatSchema,
     },
     annotations: {
@@ -287,10 +326,15 @@ Error Handling:
       openWorldHint: true,
     },
   },
-  async ({ count, focus, replace, response_format }) => {
+  async ({ count, focus, replace, include_sample_rows, response_format }) => {
     try {
       const dataset = requireDataset();
-      const generated = await generateScenarios(dataset, count, focus);
+      const generated = await generateScenarios(
+        dataset,
+        count,
+        focus,
+        include_sample_rows,
+      );
 
       if (replace) {
         state.scenarios = [];
@@ -639,6 +683,145 @@ Returns (json): { scenario_id, total, count, offset, has_more, next_offset, anom
         lines.push(``, `다음 페이지: offset=${offset + page.length}`);
       }
       return ok(truncate(lines.join("\n"), `Lower 'limit' or use offset pagination.`));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool: corpcard_save_scenarios
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  "corpcard_save_scenarios",
+  {
+    title: "Save Scenario Library",
+    description: `Save all scenarios in the current session to a JSON library file so the audit team can reuse a validated scenario set across sessions and months (MCP session state is otherwise lost on restart).
+
+Args:
+  - output_path (string, optional): Where to write the JSON file. Defaults to "corpcard_scenarios.json" next to the loaded data file (or the current directory when no data is loaded).
+
+Returns: the absolute path of the written library file. Reload later with corpcard_load_scenarios.`,
+    inputSchema: {
+      output_path: z.string().optional().describe("Output JSON file path"),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  async ({ output_path }) => {
+    try {
+      if (state.scenarios.length === 0) {
+        throw new Error("No scenarios to save. Generate or add scenarios first.");
+      }
+      const baseDir = state.dataset
+        ? path.dirname(state.dataset.file_path)
+        : process.cwd();
+      const target = path.resolve(
+        output_path ?? path.join(baseDir, "corpcard_scenarios.json"),
+      );
+      const payload = {
+        format: "corpcard-scenarios" as const,
+        version: 1,
+        saved_at: new Date().toISOString(),
+        scenarios: state.scenarios.map(({ id, created_at, ...rest }) => rest),
+      };
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, JSON.stringify(payload, null, 2), "utf8");
+      return ok(
+        `시나리오 라이브러리 저장 완료: ${target} (${state.scenarios.length}개)\n다음 세션에서 corpcard_load_scenarios로 불러올 수 있습니다.`,
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool: corpcard_load_scenarios
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  "corpcard_load_scenarios",
+  {
+    title: "Load Scenario Library",
+    description: `Load a scenario library JSON file (created by corpcard_save_scenarios, or hand-written) into the session. If card data is already loaded, the imported scenarios are automatically analyzed immediately.
+
+Accepted file shapes: {"format":"corpcard-scenarios","scenarios":[...]} or a bare array of scenario objects. Each scenario needs at least "name" and a valid "rule" (see corpcard_add_scenario for the rule DSL).
+
+Args:
+  - file_path (string): Path to the scenario library JSON file
+  - replace (boolean): true = discard existing scenarios first; false = append (default false)
+
+Returns: the imported scenarios with newly assigned IDs and, if data is loaded, their anomaly counts.`,
+    inputSchema: {
+      file_path: z.string().describe("Path to the scenario library JSON file"),
+      replace: z
+        .boolean()
+        .default(false)
+        .describe("Discard existing scenarios before importing"),
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  async ({ file_path, replace }) => {
+    try {
+      const resolved = path.resolve(file_path);
+      if (!fs.existsSync(resolved)) {
+        throw new Error(`File not found: ${resolved}`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(fs.readFileSync(resolved, "utf8"));
+      } catch {
+        throw new Error(`Not valid JSON: ${resolved}`);
+      }
+      const validated = scenarioFileSchema.safeParse(parsed);
+      if (!validated.success) {
+        throw new Error(
+          `Invalid scenario library file: ${validated.error.issues
+            .slice(0, 3)
+            .map((i) => `${i.path.join(".")}: ${i.message}`)
+            .join("; ")}`,
+        );
+      }
+      const entries = Array.isArray(validated.data)
+        ? validated.data
+        : validated.data.scenarios;
+
+      if (replace) {
+        state.scenarios = [];
+        state.results.clear();
+      }
+      const now = new Date().toISOString();
+      const imported: Scenario[] = entries.map((e) => ({
+        ...e,
+        name_en: e.name_en || e.name,
+        id: nextScenarioId(),
+        created_at: now,
+      }));
+      state.scenarios.push(...imported);
+
+      const lines: string[] = [
+        `시나리오 ${imported.length}개 불러오기 완료 (${imported.map((s) => s.id).join(", ")})`,
+      ];
+      if (state.dataset) {
+        const results = runScenarios(imported);
+        lines.push(``, `## 자동 분석 결과`, ``, ...summarizeResults(results));
+      } else {
+        lines.push(
+          `데이터가 아직 없어 분석은 보류되었습니다. corpcard_load_data 실행 시 자동 분석됩니다.`,
+        );
+      }
+      return ok(lines.join("\n"));
     } catch (e) {
       return fail(e);
     }

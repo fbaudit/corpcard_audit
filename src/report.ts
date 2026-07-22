@@ -43,6 +43,10 @@ export function buildMarkdownReport(
     lines.push(`- **심각도**: ${SEVERITY_LABEL[s.severity] ?? s.severity}`);
     lines.push(`- **설명**: ${s.description}`);
     lines.push(`- **감사 근거**: ${s.audit_rationale}`);
+    lines.push(`- **탐지 조건 (룰 정의, 감사 증적용)**:`);
+    lines.push("```json");
+    lines.push(JSON.stringify(s.rule, null, 2));
+    lines.push("```");
     if (!r) {
       lines.push(`- **결과**: 아직 분석되지 않음 (corpcard_run_analysis 실행 필요)`);
       lines.push(``);

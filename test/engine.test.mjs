@@ -34,6 +34,29 @@ test("loads sample CSV with Korean headers", () => {
   assert.equal(ds.profile.find((p) => p.name === "사용일시").inferred_type, "datetime");
 });
 
+test("auto-detects header below title/summary preamble rows", () => {
+  const ds = loadDataset(path.join(here, "fixtures", "raw_export_with_preamble.csv"));
+  assert.equal(ds.headers.join("|"), "카드번호|사용일시|가맹점명|사용금액");
+  assert.equal(ds.rows.length, 3);
+  assert.ok(ds.skipped_leading_rows >= 3);
+});
+
+test("explicit skip_rows overrides auto-detection", () => {
+  const ds = loadDataset(
+    path.join(here, "fixtures", "raw_export_with_preamble.csv"),
+    undefined,
+    4,
+  );
+  assert.equal(ds.headers[0], "카드번호");
+  assert.equal(ds.rows.length, 3);
+});
+
+test("clean files (header on row 1) are unaffected by detection", () => {
+  const ds = loadDataset(samplePath);
+  assert.equal(ds.skipped_leading_rows, 0);
+  assert.equal(ds.rows.length, 40);
+});
+
 test("parseNumber handles Korean currency formats", () => {
   assert.equal(parseNumber("1,234,567"), 1234567);
   assert.equal(parseNumber("₩12,000"), 12000);
